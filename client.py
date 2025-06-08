@@ -6,7 +6,6 @@ from google.genai import types
 import logging
 import sys
 
-from lib.util import clean_json_schema
 
 root = logging.getLogger()
 root.setLevel(logging.DEBUG)
@@ -38,9 +37,7 @@ async def main():
     prompt = "昨日の売上をカテゴリ別に集計してください。"
     contents: list[types.Content] = []
 
-    async with streamablehttp_client(
-        f"http://{mcp_server_host}:{mcp_server_port}/search/mcp/"
-    ) as (
+    async with streamablehttp_client(f"http://{mcp_server_host}:{mcp_server_port}/search/mcp/") as (
         read_stream,
         write_stream,
         _,
@@ -48,32 +45,20 @@ async def main():
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
 
-            mcp_tools = await session.list_tools()
-            tools = [
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(
-                            name=tool.name,
-                            description=tool.description,
-                            parameters=clean_json_schema(tool.inputSchema),
-                        )
-                    ],
-                )
-                for tool in mcp_tools.tools
-            ]
             config = types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
                 temperature=0,
-                tools=tools,  # type: ignore[arg-type]
+                tools=[session],  # type: ignore[arg-type]
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             )
 
             contents.append(
                 types.UserContent(
-                    parts=[types.Part.from_text(text=prompt)],
+                    parts=[types.Part(text=prompt)],
                 )
             )
 
-            response = client.models.generate_content(
+            response = await client.aio.models.generate_content(
                 model=model_name,
                 contents=contents,  # type: ignore[arg-type]
                 config=config,
@@ -94,14 +79,16 @@ async def main():
                         contents.append(
                             types.UserContent(
                                 parts=[
-                                    types.Part.from_function_response(
-                                        name=function_call.name, response={"result": result}
+                                    types.Part(
+                                        function_response=types.FunctionResponse.from_mcp_response(
+                                            name=function_call.name, response=result
+                                        )
                                     )
                                 ],
                             )
                         )
 
-                response = client.models.generate_content(
+                response = await client.aio.models.generate_content(
                     model=model_name,
                     contents=contents,  # type: ignore[arg-type]
                     config=config,
